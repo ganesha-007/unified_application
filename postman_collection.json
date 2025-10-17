@@ -1,0 +1,311 @@
+{
+  "info": {
+    "name": "WhatsApp Integration API",
+    "description": "Complete API collection for WhatsApp Integration platform",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3001/api",
+      "type": "string"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "chatId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Generate Test Token",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"user@example.com\",\n  \"userId\": \"user_123\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/test-token",
+              "host": ["{{baseUrl}}"],
+              "path": ["auth", "test-token"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp Accounts",
+      "item": [
+        {
+          "name": "List Accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/accounts",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "accounts"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Connect Account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"accountId\": \"w0Qf7ufAQ66t5CdQdqXW8w\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/connect",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "connect"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp Chats",
+      "item": [
+        {
+          "name": "List Chats",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/{{accountId}}/chats",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "{{accountId}}", "chats"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "WhatsApp Messages",
+      "item": [
+        {
+          "name": "Get Messages",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/{{accountId}}/chats/{{chatId}}/messages?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "{{accountId}}", "chats", "{{chatId}}", "messages"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Send Message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"body\": \"Hello! This is a test message from the API.\",\n  \"attachments\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/{{accountId}}/chats/{{chatId}}/send",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "{{accountId}}", "chats", "{{chatId}}", "send"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Mark as Read",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"chatId\": \"{{chatId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/channels/whatsapp/{{accountId}}/mark-read",
+              "host": ["{{baseUrl}}"],
+              "path": ["channels", "whatsapp", "{{accountId}}", "mark-read"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "UniPile Message Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"message.new\",\n  \"data\": {\n    \"account_id\": \"w0Qf7ufAQ66t5CdQdqXW8w\",\n    \"chat_id\": \"chat_123456\",\n    \"message\": {\n      \"id\": \"msg_789012\",\n      \"from\": {\n        \"name\": \"John Doe\",\n        \"phone\": \"+1234567890\"\n      },\n      \"body\": \"Hello! This is a test webhook message.\",\n      \"timestamp\": \"2025-10-16T10:30:00Z\",\n      \"attachments\": []\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/unipile/messages",
+              "host": ["{{baseUrl}}"],
+              "path": ["webhooks", "unipile", "messages"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "UniPile Account Status Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"event\": \"account.update\",\n  \"data\": {\n    \"account_id\": \"w0Qf7ufAQ66t5CdQdqXW8w\",\n    \"status\": \"connected\",\n    \"metadata\": {\n      \"phone\": \"+1234567890\",\n      \"name\": \"My WhatsApp\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/webhooks/unipile/account-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["webhooks", "unipile", "account-status"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "http://localhost:3001/health",
+          "protocol": "http",
+          "host": ["localhost"],
+          "port": "3001",
+          "path": ["health"]
+        }
+      },
+      "response": []
+    }
+  ]
+}
+
