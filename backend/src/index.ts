@@ -9,6 +9,7 @@ import { pool } from './config/database';
 import channelsRoutes from './routes/channels.routes';
 import webhooksRoutes from './routes/webhooks.routes';
 import authRoutes from './routes/auth.routes';
+import userCredentialsRoutes from './routes/user-credentials.routes';
 
 dotenv.config();
 
@@ -50,15 +51,37 @@ app.set('io', io);
 app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelsRoutes);
 app.use('/api/webhooks', webhooksRoutes);
+app.use('/api/user', userCredentialsRoutes);
 
-// Socket.io connection handling
+// Socket.io connection handling with JWT authentication
 io.on('connection', (socket) => {
   console.log(`✅ Client connected: ${socket.id}`);
 
   // Join user's room for real-time updates
   socket.on('join-user', (userId: string) => {
-    socket.join(`user:${userId}`);
-    console.log(`User ${userId} joined their room`);
+    // Verify the user ID matches the authenticated user from the token
+    const token = socket.handshake.auth?.token;
+    if (token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const secret = process.env.JWT_SECRET;
+        if (secret) {
+          const decoded = jwt.verify(token, secret) as { userId: string; email: string };
+          if (decoded.userId === userId) {
+            socket.join(`user:${userId}`);
+            console.log(`User ${userId} joined their room`);
+          } else {
+            console.log(`❌ User ID mismatch: ${userId} vs ${decoded.userId}`);
+          }
+        }
+      } catch (error) {
+        console.log(`❌ Invalid token for user: ${userId}`);
+      }
+    } else {
+      // Fallback for development - allow any user ID
+      socket.join(`user:${userId}`);
+      console.log(`User ${userId} joined their room (no auth)`);
+    }
   });
 
   // Join chat room for live messages

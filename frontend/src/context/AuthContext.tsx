@@ -15,6 +15,8 @@ interface AuthContextType {
   logout: () => void;
   isAuthenticated: boolean;
   isLoading: boolean;
+  hasCredentials: boolean;
+  checkCredentials: () => Promise<boolean>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,6 +38,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [token, setToken] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasCredentials, setHasCredentials] = useState(false);
 
   useEffect(() => {
     // Check for existing token on mount
@@ -57,15 +60,28 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     setIsLoading(false);
   }, []);
 
+  const checkCredentials = async (): Promise<boolean> => {
+    try {
+      const response = await api.get('/user/credentials');
+      const hasCreds = response.data.hasCredentials;
+      setHasCredentials(hasCreds);
+      return hasCreds;
+    } catch (error) {
+      console.error('Failed to check credentials:', error);
+      setHasCredentials(false);
+      return false;
+    }
+  };
+
   const login = async (email: string, userId: string) => {
     try {
-      const response = await api.post('/auth/test-token', { email, userId });
-      const { token: newToken } = response.data;
+      const response = await api.post('/auth/login', { email, userId });
+      const { token: newToken, user: userData } = response.data;
       
       setToken(newToken);
-      setUser({ id: userId, email });
+      setUser(userData);
       localStorage.setItem('authToken', newToken);
-      localStorage.setItem('user', JSON.stringify({ id: userId, email }));
+      localStorage.setItem('user', JSON.stringify(userData));
       
       // Initialize socket connection
       const socketInstance = io('http://localhost:3001', {
@@ -100,6 +116,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         logout,
         isAuthenticated: !!user,
         isLoading,
+        hasCredentials,
+        checkCredentials,
       }}
     >
       {children}

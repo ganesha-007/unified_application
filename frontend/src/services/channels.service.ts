@@ -1,13 +1,18 @@
 import { api } from '../config/api';
 
 export interface Account {
-  id: number;
+  id: string;
   user_id: string;
   provider: string;
   external_account_id: string;
   status: string;
   metadata: any;
   created_at: string;
+  connected_at?: string;
+  display_name?: string;
+  phone_number?: string;
+  username?: string;
+  is_connected?: boolean;
   unipileData?: any;
 }
 

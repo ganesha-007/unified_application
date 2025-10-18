@@ -79,6 +79,43 @@
   color: #666;
 }
 
+.provider-selection {
+  margin-bottom: 30px;
+}
+
+.provider-tabs {
+  display: flex;
+  gap: 8px;
+  background: white;
+  padding: 4px;
+  border-radius: 12px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  max-width: 400px;
+}
+
+.provider-tab {
+  flex: 1;
+  padding: 12px 20px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #666;
+}
+
+.provider-tab:hover {
+  background: #f5f5f5;
+}
+
+.provider-tab.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
+}
+
 .connect-section {
   background: white;
   border-radius: 12px;

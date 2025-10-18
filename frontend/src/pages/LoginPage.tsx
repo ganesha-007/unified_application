@@ -4,12 +4,12 @@ import { useAuth } from '../context/AuthContext';
 import './LoginPage.css';
 
 const LoginPage: React.FC = () => {
-  const [email, setEmail] = useState('user@example.com');
-  const [userId, setUserId] = useState('user_123');
+  const [email, setEmail] = useState('');
+  const [userId, setUserId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   
-  const { login } = useAuth();
+  const { login, checkCredentials } = useAuth();
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -19,7 +19,14 @@ const LoginPage: React.FC = () => {
 
     try {
       await login(email, userId);
-      navigate('/connections');
+      
+      // Check if user has UniPile credentials
+      const hasCreds = await checkCredentials();
+      if (hasCreds) {
+        navigate('/connections');
+      } else {
+        navigate('/onboarding');
+      }
     } catch (err: any) {
       setError(err.response?.data?.error || 'Login failed');
     } finally {
@@ -44,7 +51,7 @@ const LoginPage: React.FC = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              placeholder="user@example.com"
+              placeholder="Enter your email"
             />
           </div>
 
@@ -56,7 +63,7 @@ const LoginPage: React.FC = () => {
               value={userId}
               onChange={(e) => setUserId(e.target.value)}
               required
-              placeholder="user_123"
+              placeholder="Enter your user ID"
             />
           </div>
 
@@ -68,7 +75,7 @@ const LoginPage: React.FC = () => {
         </form>
 
         <div className="login-info">
-          <p>This is a test login. Use any email and user ID to get started.</p>
+          <p>Enter your credentials to access the messaging platform.</p>
         </div>
       </div>
     </div>

@@ -17,6 +17,8 @@ const InboxPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [unreadCounts, setUnreadCounts] = useState<{[chatId: string]: number}>({});
+  const [selectedProvider, setSelectedProvider] = useState<'whatsapp' | 'instagram'>('whatsapp');
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -24,7 +26,13 @@ const InboxPage: React.FC = () => {
   const loadAccounts = useCallback(async () => {
     try {
       setLoading(true);
-      const data = await channelsService.getAccounts('whatsapp');
+      // Clear current selections when switching providers
+      setSelectedAccount(null);
+      setSelectedChat(null);
+      setChats([]);
+      setMessages([]);
+      
+      const data = await channelsService.getAccounts(selectedProvider);
       setAccounts(data);
       if (data.length > 0) {
         setSelectedAccount(data[0]);
@@ -34,11 +42,11 @@ const InboxPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedProvider]);
 
   const loadChats = useCallback(async (accountId: string) => {
     try {
-      const data = await channelsService.getChats('whatsapp', accountId);
+      const data = await channelsService.getChats(selectedProvider, accountId);
       setChats(data);
       if (data.length > 0 && !selectedChat) {
         setSelectedChat(data[0]);
@@ -46,15 +54,44 @@ const InboxPage: React.FC = () => {
     } catch (error) {
       console.error('Failed to load chats:', error);
     }
-  }, [selectedChat]);
+  }, [selectedChat, selectedProvider]);
+
+  const calculateUnreadCounts = useCallback((currentMessages: Message[], currentChatProviderId: string) => {
+    // Only update unread counts for the current chat being viewed
+    // Don't reset existing unread counts for other chats
+    setUnreadCounts(prev => {
+      const newCounts = { ...prev };
+      
+      // Find the chat by provider_chat_id and clear its unread count
+      if (currentChatProviderId) {
+        const chat = chats.find(c => c.provider_chat_id === currentChatProviderId);
+        if (chat) {
+          delete newCounts[chat.id.toString()];
+        }
+      }
+      
+      return newCounts;
+    });
+  }, [chats]);
 
   const loadMessages = useCallback(async (accountId: string, chatId: string) => {
     try {
-      const data = await channelsService.getMessages('whatsapp', accountId, chatId);
+      const data = await channelsService.getMessages(selectedProvider, accountId, chatId);
       setMessages(data.reverse()); // Reverse to show oldest first
+      
+      // Clear unread count for the currently viewed chat
+      calculateUnreadCounts(data, chatId);
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
+  }, [calculateUnreadCounts]);
+
+  const clearUnreadCount = useCallback((chatId: string) => {
+    setUnreadCounts(prev => {
+      const newCounts = { ...prev };
+      delete newCounts[chatId];
+      return newCounts;
+    });
   }, []);
 
   const handleSendMessage = async () => {
@@ -66,15 +103,15 @@ const InboxPage: React.FC = () => {
 
     try {
       await channelsService.sendMessage(
-        'whatsapp',
-        selectedAccount.external_account_id,
+        selectedProvider,
+        selectedAccount.id as string,
         selectedChat.provider_chat_id,
         messageText
       );
 
       // Reload messages to get the latest
       await loadMessages(
-        selectedAccount.external_account_id,
+        selectedAccount.id as string,
         selectedChat.provider_chat_id
       );
     } catch (error) {
@@ -86,24 +123,36 @@ const InboxPage: React.FC = () => {
   };
 
   const handleNewMessage = useCallback((data: any) => {
+    // Update unread count for the chat that received the message
+    if (data.chatId && data.message && data.message.direction === 'in') {
+      // Find the chat ID from the provider_chat_id
+      const chat = chats.find(c => c.provider_chat_id === data.chatId);
+      if (chat) {
+        setUnreadCounts(prev => ({
+          ...prev,
+          [chat.id.toString()]: (prev[chat.id.toString()] || 0) + 1
+        }));
+      }
+    }
+    
     // Reload messages if it's for the current chat
     if (selectedChat && selectedAccount) {
       loadMessages(
-        selectedAccount.external_account_id,
+        selectedAccount.id as string,
         selectedChat.provider_chat_id
       );
     }
     // Reload chats to update last message time
     if (selectedAccount) {
-      loadChats(selectedAccount.external_account_id);
+      loadChats(selectedAccount.id as string);
     }
-  }, [selectedChat, selectedAccount, loadMessages, loadChats]);
+  }, [selectedChat, selectedAccount, loadMessages, loadChats, chats]);
 
   const handleMessageSent = useCallback((data: any) => {
     console.log('Message sent confirmation:', data);
     if (selectedChat && selectedAccount) {
       loadMessages(
-        selectedAccount.external_account_id,
+        selectedAccount.id as string,
         selectedChat.provider_chat_id
       );
     }
@@ -210,14 +259,14 @@ const InboxPage: React.FC = () => {
 
   useEffect(() => {
     if (selectedAccount) {
-      loadChats(selectedAccount.external_account_id);
+      loadChats(selectedAccount.id as string);
     }
   }, [selectedAccount, loadChats]);
 
   useEffect(() => {
     if (selectedChat && selectedAccount) {
       loadMessages(
-        selectedAccount.external_account_id,
+        selectedAccount.id as string,
         selectedChat.provider_chat_id
       );
       
@@ -234,10 +283,10 @@ const InboxPage: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="whatsapp-app">
-        <div className="loading-state">
-          <div className="loading-spinner"></div>
-          <p>Loading WhatsApp...</p>
+      <div className="inbox-loading-container">
+        <div className="inbox-loading-content">
+          <div className="inbox-loading-spinner"></div>
+          <div className="inbox-loading-text">Loading...</div>
         </div>
       </div>
     );
@@ -294,6 +343,22 @@ const InboxPage: React.FC = () => {
             </div>
           </div>
           
+          {/* Provider Tabs */}
+          <div className="provider-tabs">
+            <button
+              className={`provider-tab ${selectedProvider === 'whatsapp' ? 'active' : ''}`}
+              onClick={() => setSelectedProvider('whatsapp')}
+            >
+              📱 WhatsApp
+            </button>
+            <button
+              className={`provider-tab ${selectedProvider === 'instagram' ? 'active' : ''}`}
+              onClick={() => setSelectedProvider('instagram')}
+            >
+              📸 Instagram
+            </button>
+          </div>
+          
           {/* Search Bar */}
           <div className="search-container">
             <div className="search-box">
@@ -317,7 +382,11 @@ const InboxPage: React.FC = () => {
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
               <path d="M20 2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h4l4 4 4-4h4c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2z"/>
             </svg>
-            <span className="unread-badge">10</span>
+            {Object.values(unreadCounts).reduce((sum, count) => sum + count, 0) > 0 && (
+              <span className="unread-badge">
+                {Object.values(unreadCounts).reduce((sum, count) => sum + count, 0)}
+              </span>
+            )}
           </button>
           <button className="nav-icon" title="Status">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
@@ -343,7 +412,10 @@ const InboxPage: React.FC = () => {
               <div
                 key={chat.id}
                 className={`chat-item ${selectedChat?.id === chat.id ? 'active' : ''}`}
-                onClick={() => setSelectedChat(chat)}
+                onClick={() => {
+                  setSelectedChat(chat);
+                  clearUnreadCount(chat.id.toString());
+                }}
               >
                 {getChatAvatar(chat)}
                 <div className="chat-info">
@@ -360,9 +432,13 @@ const InboxPage: React.FC = () => {
                       {messages.find(m => m.chat_id === chat.id)?.body || 'No messages yet'}
                     </span>
                     <div className="chat-status">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                      </svg>
+                      {unreadCounts[chat.id.toString()] ? (
+                        <span className="unread-badge">{unreadCounts[chat.id.toString()]}</span>
+                      ) : (
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                        </svg>
+                      )}
                     </div>
                   </div>
                 </div>

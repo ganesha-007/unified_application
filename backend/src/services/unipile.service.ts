@@ -8,9 +8,10 @@ export class UniPileService {
   private baseURL: string;
   private client: AxiosInstance;
 
-  constructor() {
-    this.apiKey = process.env.UNIPILE_API_KEY || '';
-    this.baseURL = process.env.UNIPILE_API_URL || 'https://api22.unipile.com:15284/api/v1';
+  constructor(apiKey?: string, baseURL?: string) {
+    // Use provided credentials or fall back to environment variables
+    this.apiKey = apiKey || process.env.UNIPILE_API_KEY || '';
+    this.baseURL = baseURL || process.env.UNIPILE_API_URL || 'https://api22.unipile.com:15284/api/v1';
     
     this.client = axios.create({
       baseURL: this.baseURL,
@@ -21,6 +22,13 @@ export class UniPileService {
       },
       timeout: 30000,
     });
+  }
+
+  /**
+   * Create a new UniPile service instance with user-specific credentials
+   */
+  static createForUser(apiKey: string, baseURL: string): UniPileService {
+    return new UniPileService(apiKey, baseURL);
   }
 
   /**

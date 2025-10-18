@@ -17,7 +17,10 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
     }
 
     const token = authHeader.substring(7);
-    const secret = process.env.JWT_SECRET || 'your_jwt_secret_here';
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      throw new Error('JWT_SECRET environment variable is required');
+    }
     
     const decoded = jwt.verify(token, secret) as { userId: string; email: string };
     
@@ -34,7 +37,10 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
 
 // Generate a test JWT token for development
 export function generateTestToken(userId: string, email: string): string {
-  const secret = process.env.JWT_SECRET || 'your_jwt_secret_here';
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET environment variable is required');
+  }
   return jwt.sign({ userId, email }, secret, { expiresIn: '30d' });
 }
 

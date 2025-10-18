@@ -1,16 +1,82 @@
 import { Request, Response } from 'express';
 import { unipileService } from '../services/unipile.service';
 import { pool } from '../config/database';
+import { AuthRequest } from '../middleware/auth';
+import { getUserUniPileService, getUserWhatsAppPhone } from './user-credentials.controller';
 
 /**
  * Get all connected accounts for a provider
  */
-export async function getAccounts(req: Request, res: Response) {
+export async function getAvailableAccounts(req: AuthRequest, res: Response) {
+  try {
+    const urlParts = req.originalUrl.split('/');
+    const provider = urlParts[urlParts.indexOf('channels') + 1];
+    const userId = req.user?.id;
+    
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    // Get user-specific UniPile service
+    const userUniPileService = await getUserUniPileService(userId);
+    if (!userUniPileService) {
+      return res.status(400).json({ 
+        error: 'No UniPile credentials found', 
+        message: 'Please configure your UniPile API credentials first' 
+      });
+    }
+
+    const unipileAccounts = await userUniPileService.getAccounts();
+    console.log(`📋 Found ${unipileAccounts.length} UniPile accounts for user ${userId}`);
+
+    // Filter accounts by provider type
+    const filteredAccounts = unipileAccounts.filter((account: any) => {
+      const accountType = account.type?.toUpperCase();
+      return accountType === provider.toUpperCase();
+    });
+
+    console.log(`📋 Filtered to ${filteredAccounts.length} ${provider} accounts`);
+
+    // Check which accounts are already connected by any user
+    const connectedAccounts = await pool.query(
+      'SELECT external_account_id FROM channels_account WHERE provider = $1',
+      [provider]
+    );
+    
+    const connectedAccountIds = new Set(connectedAccounts.rows.map(row => row.external_account_id));
+
+    // Return all available accounts with connection status
+    const availableAccounts = filteredAccounts.map((account: any) => {
+      const isConnected = connectedAccountIds.has(account.id);
+      const connectedBy = isConnected ? 'another user' : 'available';
+      
+      return {
+        id: account.id,
+        type: account.type,
+        name: account.name,
+        phone_number: account.connection_params?.im?.phone_number,
+        username: account.connection_params?.im?.username,
+        status: account.status,
+        is_connected: isConnected,
+        connected_by: connectedBy,
+        unipileData: account
+      };
+    });
+
+    console.log(`📋 Returning ${availableAccounts.length} available ${provider} accounts`);
+    return res.json(availableAccounts);
+  } catch (error: any) {
+    console.error('Get available accounts error:', error);
+    res.status(500).json({ error: 'Failed to fetch available accounts' });
+  }
+}
+
+export async function getAccounts(req: AuthRequest, res: Response) {
   try {
     // Extract provider from the URL path
     const urlParts = req.originalUrl.split('/');
     const provider = urlParts[urlParts.indexOf('channels') + 1];
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
 
     // Get accounts from database
     const result = await pool.query(
@@ -21,20 +87,57 @@ export async function getAccounts(req: Request, res: Response) {
     // Enrich with UniPile data for WhatsApp/Instagram
     if (provider === 'whatsapp' || provider === 'instagram') {
       try {
-        const unipileAccounts = await unipileService.getAccounts();
-        const enrichedAccounts = result.rows.map((account: any) => {
-          const unipileAccount = unipileAccounts.find(
-            (ua: any) => ua.id === account.external_account_id
-          );
+        // Get user-specific UniPile service
+        const userUniPileService = await getUserUniPileService(userId);
+        if (!userUniPileService) {
+          return res.status(400).json({ 
+            error: 'No UniPile credentials found', 
+            message: 'Please configure your UniPile API credentials first' 
+          });
+        }
+
+        const unipileAccounts = await userUniPileService.getAccounts();
+        console.log(`📋 Found ${unipileAccounts.length} UniPile accounts for user ${userId}`);
+
+        // Filter accounts by provider type
+        const filteredAccounts = unipileAccounts.filter((account: any) => {
+          const accountType = account.type?.toUpperCase();
+          return accountType === provider.toUpperCase();
+        });
+
+        console.log(`📋 Filtered to ${filteredAccounts.length} ${provider} accounts`);
+
+        // Only show accounts that are connected by the CURRENT user
+        // Start with database accounts (only current user's accounts)
+        const accountsWithStatus = result.rows.map((dbAccount: any) => {
+          // Find the corresponding UniPile account data
+          const unipileAccount = filteredAccounts.find((ua: any) => ua.id === dbAccount.external_account_id);
+          
           return {
-            ...account,
-            unipileData: unipileAccount,
+            id: dbAccount.external_account_id,
+            type: unipileAccount?.type || provider,
+            status: unipileAccount?.status || dbAccount.status,
+            display_name: unipileAccount?.display_name || 
+                         (unipileAccount?.phone_number ? `+${unipileAccount.phone_number}` : unipileAccount?.username) ||
+                         dbAccount.external_account_id,
+            phone_number: unipileAccount?.phone_number,
+            username: unipileAccount?.username,
+            is_connected: true, // All shown accounts are connected by this user
+            connected_at: dbAccount.created_at,
+            unipileData: unipileAccount
           };
         });
-        return res.json(enrichedAccounts);
-      } catch (error) {
-        // If UniPile fails, return DB data only
-        return res.json(result.rows);
+
+        console.log(`📋 Showing ${accountsWithStatus.length} ${provider} accounts for user ${userId}`);
+        console.log(`🔍 DEBUG: Database returned ${result.rows.length} rows for user ${userId}`);
+        console.log(`🔍 DEBUG: Final accounts to return:`, accountsWithStatus.map(a => a.id));
+        return res.json(accountsWithStatus);
+      } catch (error: any) {
+        console.error('UniPile error:', error);
+        return res.status(500).json({ 
+          error: 'Failed to fetch UniPile accounts', 
+          details: error.message 
+        });
       }
     }
 
@@ -48,49 +151,120 @@ export async function getAccounts(req: Request, res: Response) {
 /**
  * Connect a new account (initiates hosted auth for WhatsApp/Instagram)
  */
-export async function connectAccount(req: Request, res: Response) {
+export async function connectAccount(req: AuthRequest, res: Response) {
   try {
     // Extract provider from the URL path
     const urlParts = req.originalUrl.split('/');
     const provider = urlParts[urlParts.indexOf('channels') + 1];
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
 
     if (provider === 'whatsapp' || provider === 'instagram') {
       try {
-        // Get actual accounts from UniPile
-        const unipileAccounts = await unipileService.getAccounts();
+        // Get user-specific UniPile service
+        const userUniPileService = await getUserUniPileService(userId);
+        if (!userUniPileService) {
+          return res.status(400).json({ 
+            error: 'No UniPile credentials found', 
+            message: 'Please configure your UniPile API credentials first' 
+          });
+        }
+
+        // Get actual accounts from user's UniPile
+        const unipileAccounts = await userUniPileService.getAccounts();
         console.log('📋 Available UniPile accounts:', JSON.stringify(unipileAccounts, null, 2));
         
-        // Find the first WhatsApp account
-        const whatsappAccount = unipileAccounts.find((account: any) => 
-          account.type === 'WHATSAPP'
-        );
+        // Debug: Log all account types
+        console.log('🔍 Account types found:', unipileAccounts.map((acc: any) => `${acc.type} (${acc.id})`));
         
-        if (!whatsappAccount) {
+        // Debug: Check if accounts array is valid
+        console.log('🔍 Accounts array length:', unipileAccounts.length);
+        console.log('🔍 First account:', unipileAccounts[0]);
+        
+        // Find the account based on provider type and optional accountId
+        let targetAccount;
+        const { accountId: requestedAccountId } = req.body;
+        
+        if (requestedAccountId) {
+          // User specified a specific account ID
+          targetAccount = unipileAccounts.find((account: any) => 
+            account.id === requestedAccountId && account.type === provider.toUpperCase()
+          );
+          
+          if (!targetAccount) {
+            return res.status(404).json({ 
+              error: 'Account not found',
+              message: `Account with ID ${requestedAccountId} not found in your ${provider} accounts`,
+              availableAccounts: unipileAccounts.filter((acc: any) => acc.type === provider.toUpperCase())
+            });
+          }
+        } else {
+          // Auto-select first available account of the provider type
+          if (provider === 'whatsapp') {
+            targetAccount = unipileAccounts.find((account: any) => 
+              account.type === 'WHATSAPP'
+            );
+          } else if (provider === 'instagram') {
+            targetAccount = unipileAccounts.find((account: any) => 
+              account.type === 'INSTAGRAM'
+            );
+          }
+        }
+        
+        console.log(`🔍 Looking for ${provider} account. Found:`, targetAccount ? `${targetAccount.type} - ${targetAccount.name} (${targetAccount.id})` : 'None');
+        
+        // Debug: Show all accounts for comparison
+        console.log('🔍 All accounts for comparison:');
+        unipileAccounts.forEach((acc: any, index: number) => {
+          console.log(`  ${index}: ${acc.type} - ${acc.name} (${acc.id})`);
+        });
+        
+        if (!targetAccount) {
           return res.status(404).json({ 
-            error: 'No WhatsApp account found in UniPile',
+            error: `No ${provider} account found in UniPile`,
             availableAccounts: unipileAccounts
           });
         }
         
-        const accountId = whatsappAccount.id;
-        console.log(`✅ Using WhatsApp account ID: ${accountId}`);
+        const accountId = targetAccount.id;
+        console.log(`✅ Using ${provider} account ID: ${accountId}`);
         
+        // Check if account is already connected by another user
+        const existingAccount = await pool.query(
+          'SELECT user_id FROM channels_account WHERE provider = $1 AND external_account_id = $2',
+          [provider, accountId]
+        );
+
+        if (existingAccount.rows.length > 0) {
+          const existingUserId = existingAccount.rows[0].user_id;
+          return res.status(409).json({
+            error: 'Account already connected',
+            message: `This ${provider} account is already connected by another user (${existingUserId}). Each account can only be connected by one user.`,
+            accountId: accountId,
+            connectedBy: existingUserId
+          });
+        }
+
         // Store in database
         await pool.query(
           `INSERT INTO channels_account (user_id, provider, external_account_id, status)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (user_id, provider, external_account_id) 
-           DO UPDATE SET status = $4, updated_at = CURRENT_TIMESTAMP`,
+           VALUES ($1, $2, $3, $4)`,
           [userId, provider, accountId, 'connected']
         );
+
+        // Get display name based on provider
+        let displayName = 'Unknown';
+        if (provider === 'whatsapp') {
+          displayName = targetAccount.connection_params?.im?.phone_number || targetAccount.name || 'Unknown';
+        } else if (provider === 'instagram') {
+          displayName = targetAccount.connection_params?.im?.username || targetAccount.name || 'Unknown';
+        }
 
         res.json({ 
           success: true, 
           message: `${provider} account connected successfully`,
           accountId,
-          phoneNumber: whatsappAccount.connection_params?.im?.phone_number || whatsappAccount.name || 'Unknown',
-          accountData: whatsappAccount
+          displayName,
+          accountData: targetAccount
         });
       } catch (error: any) {
         console.error('Failed to get UniPile accounts:', error);
@@ -111,13 +285,13 @@ export async function connectAccount(req: Request, res: Response) {
 /**
  * Get chats for a specific account
  */
-export async function getChats(req: Request, res: Response) {
+export async function getChats(req: AuthRequest, res: Response) {
   try {
     // Extract provider from the URL path
     const urlParts = req.originalUrl.split('/');
     const provider = urlParts[urlParts.indexOf('channels') + 1];
     const { accountId } = req.params;
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
 
     // Verify account belongs to user
     const accountCheck = await pool.query(
@@ -141,6 +315,29 @@ export async function getChats(req: Request, res: Response) {
     if (provider === 'whatsapp' || provider === 'instagram') {
       try {
         const unipileChats = await unipileService.getChats(accountId);
+        
+        // First, clean up existing duplicates in database by phone number
+        // Extract phone number from provider_chat_id and deduplicate by that
+        await pool.query(`
+          DELETE FROM channels_chat 
+          WHERE account_id = $1 AND id NOT IN (
+            SELECT DISTINCT ON (
+              CASE 
+                WHEN provider_chat_id LIKE '%@s.whatsapp.net' THEN provider_chat_id
+                ELSE metadata::json->>'provider_id'
+              END
+            ) id 
+            FROM channels_chat 
+            WHERE account_id = $1 
+            ORDER BY 
+              CASE 
+                WHEN provider_chat_id LIKE '%@s.whatsapp.net' THEN provider_chat_id
+                ELSE metadata::json->>'provider_id'
+              END, 
+              last_message_at DESC,
+              id DESC
+          )
+        `, [dbAccountId]);
         
         // Sync chats to database - deduplicate by provider_id (phone number)
         const uniqueChats = new Map();
@@ -180,16 +377,31 @@ export async function getChats(req: Request, res: Response) {
           // Use provider_id as the unique identifier instead of chat.id
           const providerChatId = chat.provider_id || chat.attendee_provider_id || chat.id;
           
+          // Generate a better title if chat.name is empty or "Unknown Chat"
+          let chatTitle = chat.name;
+          if (!chatTitle || chatTitle === 'Unknown Chat' || chatTitle.trim() === '') {
+            // Try to extract name from attendees
+            if (chat.attendees && chat.attendees.length > 0) {
+              const attendee = chat.attendees[0];
+              chatTitle = attendee.attendee_name || attendee.attendee_provider_id || 'Unknown Contact';
+            } else if (chat.provider_id) {
+              // Use phone number as title
+              chatTitle = chat.provider_id.replace('@s.whatsapp.net', '');
+            } else {
+              chatTitle = 'Unknown Contact';
+            }
+          }
+          
           await pool.query(
             `INSERT INTO channels_chat (account_id, provider_chat_id, title, last_message_at, metadata)
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (account_id, provider_chat_id) 
              DO UPDATE SET 
-               title = CASE WHEN $3 != 'Unknown Chat' THEN $3 ELSE channels_chat.title END,
+               title = CASE WHEN $3 != 'Unknown Contact' THEN $3 ELSE channels_chat.title END,
                last_message_at = $4, 
                metadata = $5, 
                updated_at = CURRENT_TIMESTAMP`,
-            [dbAccountId, providerChatId, chat.name || 'Unknown Chat', lastMessageAt, JSON.stringify(chat)]
+            [dbAccountId, providerChatId, chatTitle, lastMessageAt, JSON.stringify(chat)]
           );
         }
       } catch (error) {
@@ -213,13 +425,13 @@ export async function getChats(req: Request, res: Response) {
 /**
  * Get messages for a specific chat
  */
-export async function getMessages(req: Request, res: Response) {
+export async function getMessages(req: AuthRequest, res: Response) {
   try {
     // Extract provider from the URL path
     const urlParts = req.originalUrl.split('/');
     const provider = urlParts[urlParts.indexOf('channels') + 1];
     const { accountId, chatId } = req.params;
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
     const { limit = 50, offset = 0 } = req.query;
 
     // Verify account belongs to user
@@ -265,13 +477,13 @@ export async function getMessages(req: Request, res: Response) {
 /**
  * Send a message
  */
-export async function sendMessage(req: Request, res: Response) {
+export async function sendMessage(req: AuthRequest, res: Response) {
   try {
     // Extract provider from the URL path
     const urlParts = req.originalUrl.split('/');
     const provider = urlParts[urlParts.indexOf('channels') + 1];
     const { accountId, chatId } = req.params;
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
     const { body, attachments } = req.body;
 
     if (!body) {
@@ -355,12 +567,110 @@ export async function sendMessage(req: Request, res: Response) {
 }
 
 /**
+ * Clean up duplicate chats
+ */
+export async function cleanupDuplicates(req: AuthRequest, res: Response) {
+  try {
+    const urlParts = req.originalUrl.split('/');
+    const provider = urlParts[urlParts.indexOf('channels') + 1];
+    const { accountId } = req.params;
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
+
+    // Verify account belongs to user
+    const accountCheck = await pool.query(
+      'SELECT id FROM channels_account WHERE user_id = $1 AND provider = $2 AND external_account_id = $3',
+      [userId, provider, accountId]
+    );
+
+    if (accountCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const dbAccountId = accountCheck.rows[0].id;
+
+    // Clean up duplicates - keep only the most recent chat for each phone number
+    const result = await pool.query(`
+      DELETE FROM channels_chat 
+      WHERE account_id = $1 AND id NOT IN (
+        SELECT DISTINCT ON (
+          CASE 
+            WHEN provider_chat_id LIKE '%@s.whatsapp.net' THEN provider_chat_id
+            ELSE metadata::json->>'provider_id'
+          END
+        ) id 
+        FROM channels_chat 
+        WHERE account_id = $1 
+        ORDER BY 
+          CASE 
+            WHEN provider_chat_id LIKE '%@s.whatsapp.net' THEN provider_chat_id
+            ELSE metadata::json->>'provider_id'
+          END, 
+          last_message_at DESC,
+          id DESC
+      )
+    `, [dbAccountId]);
+
+    console.log(`🧹 Cleaned up ${result.rowCount} duplicate chats for account ${accountId}`);
+
+    res.json({ 
+      success: true, 
+      message: `Cleaned up ${result.rowCount} duplicate chats`,
+      duplicatesRemoved: result.rowCount 
+    });
+  } catch (error: any) {
+    console.error('Cleanup duplicates error:', error);
+    res.status(500).json({ error: 'Failed to cleanup duplicates' });
+  }
+}
+
+/**
+ * Clean up unknown chats
+ */
+export async function cleanupUnknownChats(req: AuthRequest, res: Response) {
+  try {
+    const urlParts = req.originalUrl.split('/');
+    const provider = urlParts[urlParts.indexOf('channels') + 1];
+    const { accountId } = req.params;
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
+
+    // Verify account belongs to user
+    const accountCheck = await pool.query(
+      'SELECT id FROM channels_account WHERE user_id = $1 AND provider = $2 AND external_account_id = $3',
+      [userId, provider, accountId]
+    );
+
+    if (accountCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+
+    const dbAccountId = accountCheck.rows[0].id;
+
+    // Delete all chats with title "Unknown Chat" or "Unknown Contact"
+    const result = await pool.query(`
+      DELETE FROM channels_chat 
+      WHERE account_id = $1 AND (title = 'Unknown Chat' OR title = 'Unknown Contact')
+    `, [dbAccountId]);
+
+    console.log(`🧹 Cleaned up ${result.rowCount} unknown chats for account ${accountId}`);
+
+    res.json({ 
+      success: true, 
+      message: `Cleaned up ${result.rowCount} unknown chats`,
+      unknownChatsRemoved: result.rowCount 
+    });
+  } catch (error: any) {
+    console.error('Cleanup unknown chats error:', error);
+    res.status(500).json({ error: 'Failed to cleanup unknown chats' });
+  }
+}
+
+/**
  * Mark messages as read
  */
-export async function markAsRead(req: Request, res: Response) {
+export async function markAsRead(req: AuthRequest, res: Response) {
   try {
     const { provider, accountId, chatId } = req.params;
-    const userId = 'user_123'; // Default user ID since no auth
+    const userId = req.user?.id || 'user_123'; // Use authenticated user ID
 
     // Verify account belongs to user
     const accountCheck = await pool.query(

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { channelsService, Account } from '../services/channels.service';
+import { api } from '../config/api';
 import './ConnectionsPage.css';
 
 const ConnectionsPage: React.FC = () => {
@@ -12,15 +13,34 @@ const ConnectionsPage: React.FC = () => {
   const [error, setError] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [accountIdInput, setAccountIdInput] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<'whatsapp' | 'instagram'>('whatsapp');
+  const [userWhatsAppPhone, setUserWhatsAppPhone] = useState<string>('');
 
   useEffect(() => {
     loadAccounts();
-  }, []);
+    loadUserCredentials();
+  }, [selectedProvider]);
+
+  const loadUserCredentials = async () => {
+    try {
+      const response = await api.get('/user/credentials');
+      
+      if (response.data.hasCredentials && response.data.data.whatsapp_phone_number) {
+        const phone = response.data.data.whatsapp_phone_number;
+        // Remove @s.whatsapp.net suffix and add + prefix
+        const cleanPhone = phone.replace('@s.whatsapp.net', '');
+        const formattedPhone = `+${cleanPhone}`;
+        setUserWhatsAppPhone(formattedPhone);
+      }
+    } catch (error) {
+      console.error('Failed to load user credentials:', error);
+    }
+  };
 
   const loadAccounts = async () => {
     try {
       setLoading(true);
-      const data = await channelsService.getAccounts('whatsapp');
+      const data = await channelsService.getAccounts(selectedProvider);
       setAccounts(data);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Failed to load accounts');
@@ -34,10 +54,15 @@ const ConnectionsPage: React.FC = () => {
       setConnecting(true);
       setError('');
       // Auto-connect without requiring account ID input
-      await channelsService.connectAccount('whatsapp', '');
+      await channelsService.connectAccount(selectedProvider, '');
       await loadAccounts();
     } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to connect account');
+      const errorData = err.response?.data;
+      if (errorData?.error === 'Account already connected') {
+        setError(`This ${selectedProvider} account is already connected by another user. Each account can only be connected by one user.`);
+      } else {
+        setError(errorData?.error || errorData?.message || 'Failed to connect account');
+      }
     } finally {
       setConnecting(false);
     }
@@ -62,7 +87,7 @@ const ConnectionsPage: React.FC = () => {
     <div className="connections-page">
       <div className="header">
         <div className="header-content">
-          <h1>WhatsApp Integration</h1>
+          <h1>Social Media Integration</h1>
           <div className="header-actions">
             <button onClick={() => navigate('/inbox')} className="btn-secondary">
               Go to Inbox
@@ -77,22 +102,43 @@ const ConnectionsPage: React.FC = () => {
       <div className="content">
         <div className="page-header">
           <h2>Connected Accounts</h2>
-          <p>Manage your WhatsApp accounts</p>
+          <p>Manage your social media accounts</p>
+        </div>
+
+        {/* Provider Selection */}
+        <div className="provider-selection">
+          <div className="provider-tabs">
+            <button
+              className={`provider-tab ${selectedProvider === 'whatsapp' ? 'active' : ''}`}
+              onClick={() => setSelectedProvider('whatsapp')}
+            >
+              📱 WhatsApp
+            </button>
+            <button
+              className={`provider-tab ${selectedProvider === 'instagram' ? 'active' : ''}`}
+              onClick={() => setSelectedProvider('instagram')}
+            >
+              📸 Instagram
+            </button>
+          </div>
         </div>
 
         {/* Connect New Account Section */}
         <div className="connect-section">
-          <h3>Connect WhatsApp Account</h3>
+          <h3>Connect {selectedProvider === 'whatsapp' ? 'WhatsApp' : 'Instagram'} Account</h3>
           <div className="connect-form">
             <p className="connect-info">
-              Click below to automatically connect your WhatsApp number (+919566651479)
+              {selectedProvider === 'whatsapp' 
+                ? `Click below to automatically connect your WhatsApp number (${userWhatsAppPhone || '+919566651479'})`
+                : 'Click below to automatically connect your Instagram account (ganesh)'
+              }
             </p>
             <button
               onClick={handleConnect}
               disabled={connecting}
               className="btn-primary"
             >
-              {connecting ? 'Connecting...' : 'Connect WhatsApp Account'}
+              {connecting ? 'Connecting...' : `Connect ${selectedProvider === 'whatsapp' ? 'WhatsApp' : 'Instagram'} Account`}
             </button>
           </div>
           {error && <div className="error-message">{error}</div>}
@@ -115,13 +161,13 @@ const ConnectionsPage: React.FC = () => {
                   <div className="account-info">
                     <div className="account-icon">💬</div>
                     <div className="account-details">
-                      <h4>{account.external_account_id}</h4>
+                      <h4>{(account as any).display_name || (account as any).phone_number || (account as any).username || account.external_account_id}</h4>
                       <div className="account-meta">
                         <span className="status-badge" style={{ color: getStatusColor(account.status) }}>
                           {account.status}
                         </span>
                         <span className="account-date">
-                          Connected on {new Date(account.created_at).toLocaleDateString()}
+                          Connected on {new Date((account as any).connected_at || account.created_at).toLocaleDateString()}
                         </span>
                       </div>
                     </div>

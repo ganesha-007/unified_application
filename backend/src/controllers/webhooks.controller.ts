@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { pool } from '../config/database';
 import { Server as SocketIOServer } from 'socket.io';
+import { getUserWhatsAppPhone } from './user-credentials.controller';
 
 /**
  * Handle incoming messages from UniPile webhook
@@ -59,25 +60,49 @@ export async function handleUniPileMessage(req: any, res: Response) {
 
       // Find the account in our database, create if not exists
       let accountResult = await pool.query(
-        'SELECT id FROM channels_account WHERE external_account_id = $1',
+        'SELECT id, provider, user_id FROM channels_account WHERE external_account_id = $1',
         [account_id]
       );
 
+      let provider = 'whatsapp'; // Default to whatsapp for backward compatibility
+      
       if (accountResult.rows.length === 0) {
         console.log(`📝 Account ${account_id} not found, creating it automatically...`);
         
-        // Create the account with a default user (you may want to modify this logic)
-        const defaultUserId = 'user_123'; // This should be dynamic in production
+        // Try to determine provider from UniPile account data
+        try {
+          const unipileService = require('../services/unipile.service').unipileService;
+          const unipileAccounts = await unipileService.getAccounts();
+          const unipileAccount = unipileAccounts.find((acc: any) => acc.id === account_id);
+          
+          if (unipileAccount) {
+            if (unipileAccount.type === 'INSTAGRAM') {
+              provider = 'instagram';
+            } else if (unipileAccount.type === 'WHATSAPP') {
+              provider = 'whatsapp';
+            }
+            console.log(`🔍 Detected provider: ${provider} for account ${account_id}`);
+          }
+        } catch (error) {
+          console.warn('Could not determine provider from UniPile, defaulting to whatsapp');
+        }
+        
+        // Create the account with a dynamic user ID based on account data
+        // In production, you should determine the user ID based on the account
+        // For now, we'll use a pattern based on the account ID for uniqueness
+        const defaultUserId = `user_${req.body.account_id.substring(0, 8)}`; // Dynamic based on account ID
         
         const newAccount = await pool.query(
           `INSERT INTO channels_account (user_id, provider, external_account_id, status)
            VALUES ($1, $2, $3, $4)
-           RETURNING id`,
-          [defaultUserId, 'whatsapp', account_id, 'connected']
+           RETURNING id, provider`,
+          [defaultUserId, provider, account_id, 'connected']
         );
         
         accountResult = newAccount;
-        console.log(`✅ Created account ${account_id} for user ${defaultUserId}`);
+        console.log(`✅ Created ${provider} account ${account_id} for user ${defaultUserId}`);
+      } else {
+        provider = accountResult.rows[0].provider;
       }
 
       const dbAccountId = accountResult.rows[0].id;
@@ -110,6 +135,53 @@ export async function handleUniPileMessage(req: any, res: Response) {
         dbChatId = chatResult.rows[0].id;
       }
 
+      // Determine message direction based on sender and provider
+      let messageDirection = 'in'; // Default to incoming
+      
+      if (provider === 'whatsapp') {
+        // Get the account owner's phone number from user credentials
+        const userId = accountResult.rows[0]?.user_id;
+        let accountOwnerPhone = process.env.WHATSAPP_PHONE_NUMBER || '919566651479@s.whatsapp.net'; // Fallback
+        
+        if (userId) {
+          const userWhatsAppPhone = await getUserWhatsAppPhone(userId);
+          if (userWhatsAppPhone) {
+            accountOwnerPhone = userWhatsAppPhone;
+          }
+        }
+        
+        const senderPhone = req.body.sender?.attendee_provider_id || message.from?.phone || '';
+        messageDirection = senderPhone === accountOwnerPhone ? 'out' : 'in';
+        console.log(`📤 WhatsApp message direction: ${messageDirection} (sender: ${senderPhone}, owner: ${accountOwnerPhone})`);
+      } else if (provider === 'instagram') {
+        // For Instagram, check if the sender is the account owner
+        const senderId = req.body.sender?.attendee_provider_id || message.from?.phone || '';
+        const accountOwnerId = req.body.account_info?.user_id || '';
+        
+        // Debug: Log all the IDs we're comparing
+        console.log(`🔍 Instagram IDs - Sender: ${senderId}, Account Owner: ${accountOwnerId}, Account ID: ${account_id}`);
+        console.log(`🔍 Instagram sender name: ${req.body.sender?.attendee_name}, account username: ${req.body.account_info?.username}`);
+        
+        // For Instagram, we can also check by sender name matching account username
+        const senderName = req.body.sender?.attendee_name || '';
+        const accountUsername = req.body.account_info?.username || '';
+        
+        // If sender ID matches account owner ID OR sender name matches account username, it's outgoing
+        if (senderId === accountOwnerId || senderName === accountUsername) {
+          messageDirection = 'out';
+        } else {
+          messageDirection = 'in';
+        }
+        
+        console.log(`📤 Instagram message direction: ${messageDirection} (sender: ${senderId}/${senderName}, owner: ${accountOwnerId}/${accountUsername})`);
+      }
+
+      // Skip storing outgoing messages in webhook - they're already stored when sent via API
+      if (messageDirection === 'out') {
+        console.log(`⏭️ Skipping outgoing message in webhook: ${message.id}`);
+        return res.json({ received: true, skipped: 'outgoing message' });
+      }
+
       // Store the message
       await pool.query(
         `INSERT INTO channels_message (chat_id, provider_msg_id, direction, body, attachments, sent_at)
@@ -118,7 +190,7 @@ export async function handleUniPileMessage(req: any, res: Response) {
         [
           dbChatId,
           message.id,
-          'in',
+          messageDirection,
           message.body || message.text,
           JSON.stringify(message.attachments || []),
           new Date(message.timestamp)
@@ -134,7 +206,7 @@ export async function handleUniPileMessage(req: any, res: Response) {
       // Update usage
       const userId = await getUserIdFromAccount(dbAccountId);
       if (userId) {
-        await updateUsage(userId, 'whatsapp', 'received');
+        await updateUsage(userId, provider, 'received');
       }
 
       console.log(`✅ Stored incoming message: ${message.id}`);
@@ -148,7 +220,7 @@ export async function handleUniPileMessage(req: any, res: Response) {
           const messageData = {
             id: message.id,
             body: message.body || message.text,
-            direction: 'in',
+            direction: messageDirection,
             sent_at: message.timestamp,
             from: message.from,
             chat_id: dbChatId,

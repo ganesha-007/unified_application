@@ -8,6 +8,38 @@
   overflow: hidden;
 }
 
+/* Provider Tabs inside sidebar */
+.provider-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px;
+  background: #202c33;
+  border-bottom: 1px solid #2a3942;
+}
+
+.provider-tab {
+  flex: 1;
+  padding: 8px 12px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  color: #8696a0;
+}
+
+.provider-tab:hover {
+  background: #2a3942;
+  color: #e9edef;
+}
+
+.provider-tab.active {
+  background: #00a884;
+  color: white;
+}
+
 /* Loading State */
 .loading-state {
   display: flex;
@@ -27,6 +59,42 @@
   border-radius: 50%;
   animation: spin 1s linear infinite;
   margin-bottom: 20px;
+}
+
+/* Inbox Loading Styles - Full Screen Centered */
+.inbox-loading-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #111b21;
+  z-index: 9999;
+}
+
+.inbox-loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.inbox-loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid #2a3942;
+  border-top: 3px solid #00a884;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.inbox-loading-text {
+  color: #e9edef;
+  font-size: 18px;
+  font-weight: 500;
 }
 
 @keyframes spin {
@@ -227,6 +295,20 @@
   border-radius: 10px;
   min-width: 16px;
   text-align: center;
+}
+
+/* Chat item unread badge */
+.chat-status .unread-badge {
+  position: static;
+  background: #00a884;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  min-width: 18px;
+  text-align: center;
+  margin-left: auto;
 }
 
 /* Chat List */
