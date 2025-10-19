@@ -2,7 +2,67 @@ import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
 import { pool } from '../config/database';
 import { Server as SocketIOServer } from 'socket.io';
-import { getUserWhatsAppPhone } from './user-credentials.controller';
+import { getUserWhatsAppPhone, getUserUniPileService } from './user-credentials.controller';
+
+/**
+ * Validate account type consistency
+ */
+async function validateAccountTypeConsistency(accountId: string, detectedProvider: string): Promise<boolean> {
+  try {
+    // Check if account already exists with different provider
+    const existingAccount = await pool.query(
+      'SELECT provider FROM channels_account WHERE external_account_id = $1',
+      [accountId]
+    );
+    
+    if (existingAccount.rows.length > 0) {
+      const existingProvider = existingAccount.rows[0].provider;
+      if (existingProvider !== detectedProvider) {
+        console.warn(`⚠️ Account type mismatch detected: ${accountId} is ${existingProvider} but detected as ${detectedProvider}`);
+        return false;
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error validating account type consistency:', error);
+    return false;
+  }
+}
+
+/**
+ * Check data consistency across all accounts
+ */
+export async function checkDataConsistency(req: any, res: Response) {
+  try {
+    console.log('🔍 Running data consistency check...');
+    
+    // Find accounts with potential inconsistencies
+    const inconsistentAccounts = await pool.query(`
+      SELECT 
+        ca.user_id,
+        ca.provider,
+        ca.external_account_id,
+        COUNT(cc.id) as chat_count,
+        COUNT(CASE WHEN cc.metadata->>'account_type' != ca.provider THEN 1 END) as inconsistent_chats
+      FROM channels_account ca
+      LEFT JOIN channels_chat cc ON ca.id = cc.account_id
+      GROUP BY ca.id, ca.user_id, ca.provider, ca.external_account_id
+      HAVING COUNT(CASE WHEN cc.metadata->>'account_type' != ca.provider THEN 1 END) > 0
+    `);
+    
+    console.log(`Found ${inconsistentAccounts.rows.length} potentially inconsistent accounts`);
+    
+    res.json({
+      success: true,
+      inconsistent_accounts: inconsistentAccounts.rows,
+      total_inconsistent: inconsistentAccounts.rows.length
+    });
+  } catch (error: any) {
+    console.error('Data consistency check error:', error);
+    res.status(500).json({ error: 'Failed to check data consistency' });
+  }
+}
 
 /**
  * Handle incoming messages from UniPile webhook
@@ -69,28 +129,70 @@ export async function handleUniPileMessage(req: any, res: Response) {
       if (accountResult.rows.length === 0) {
         console.log(`📝 Account ${account_id} not found, creating it automatically...`);
         
-        // Try to determine provider from UniPile account data
+        // Try to determine provider from UniPile account data using user-specific service
         try {
-          const unipileService = require('../services/unipile.service').unipileService;
-          const unipileAccounts = await unipileService.getAccounts();
-          const unipileAccount = unipileAccounts.find((acc: any) => acc.id === account_id);
+          // First, try to find which user this account belongs to by checking existing accounts
+          const existingAccount = await pool.query(
+            'SELECT user_id FROM channels_account WHERE external_account_id = $1',
+            [account_id]
+          );
           
-          if (unipileAccount) {
-            if (unipileAccount.type === 'INSTAGRAM') {
-              provider = 'instagram';
-            } else if (unipileAccount.type === 'WHATSAPP') {
-              provider = 'whatsapp';
+          if (existingAccount.rows.length > 0) {
+            const userId = existingAccount.rows[0].user_id;
+            console.log(`🔍 Found existing user ${userId} for account ${account_id}, using user-specific service`);
+            
+            // Use user-specific UniPile service
+            const userUniPileService = await getUserUniPileService(userId);
+            if (userUniPileService) {
+              const unipileAccounts = await userUniPileService.getAccounts();
+              const unipileAccount = unipileAccounts.find((acc: any) => acc.id === account_id);
+              
+              if (unipileAccount) {
+                if (unipileAccount.type === 'INSTAGRAM') {
+                  provider = 'instagram';
+                } else if (unipileAccount.type === 'WHATSAPP') {
+                  provider = 'whatsapp';
+                }
+                console.log(`🔍 Detected provider: ${provider} for account ${account_id} using user-specific service`);
+              }
             }
-            console.log(`🔍 Detected provider: ${provider} for account ${account_id}`);
+          } else {
+            console.log(`⚠️ No existing user found for account ${account_id}, using fallback detection`);
+            // Fallback to global service only if no user found
+            const unipileService = require('../services/unipile.service').unipileService;
+            const unipileAccounts = await unipileService.getAccounts();
+            const unipileAccount = unipileAccounts.find((acc: any) => acc.id === account_id);
+            
+            if (unipileAccount) {
+              if (unipileAccount.type === 'INSTAGRAM') {
+                provider = 'instagram';
+              } else if (unipileAccount.type === 'WHATSAPP') {
+                provider = 'whatsapp';
+              }
+              console.log(`🔍 Detected provider: ${provider} for account ${account_id} using global service (fallback)`);
+            }
           }
-        } catch (error) {
-          console.warn('Could not determine provider from UniPile, defaulting to whatsapp');
+        } catch (error: any) {
+          console.warn('Could not determine provider from UniPile, defaulting to whatsapp:', error.message);
         }
         
         // Create the account with a dynamic user ID based on account data
         // In production, you should determine the user ID based on the account
         // For now, we'll use a pattern based on the account ID for uniqueness
         const defaultUserId = `user_${req.body.account_id.substring(0, 8)}`; // Dynamic based on account ID
+        
+        // Validate account type consistency before creating
+        const isConsistent = await validateAccountTypeConsistency(account_id, provider);
+        if (!isConsistent) {
+          console.error(`❌ Account type inconsistency detected for ${account_id}, skipping creation`);
+          return res.status(400).json({ 
+            error: 'Account type inconsistency detected',
+            message: `Account ${account_id} has conflicting provider types`
+          });
+        }
+        
+        // Validate account type before creating
+        console.log(`🔍 Creating account with provider: ${provider} for user: ${defaultUserId}`);
         
         const newAccount = await pool.query(
           `INSERT INTO channels_account (user_id, provider, external_account_id, status)

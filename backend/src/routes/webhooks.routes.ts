@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   handleUniPileMessage,
   handleUniPileAccountStatus,
+  checkDataConsistency,
 } from '../controllers/webhooks.controller';
 
 const router = Router();
@@ -13,6 +14,9 @@ router.get('/unipile/messages', (req, res) => {
   res.json({ status: 'webhook endpoint active' });
 });
 router.post('/unipile/account-status', handleUniPileAccountStatus);
+
+// Data consistency check (for debugging)
+router.get('/consistency-check', checkDataConsistency);
 
 export default router;
 

@@ -25,6 +25,7 @@ const InboxPage: React.FC = () => {
   // Define all functions first
   const loadAccounts = useCallback(async () => {
     try {
+      console.log('🔄 Loading accounts for provider:', selectedProvider);
       setLoading(true);
       // Clear current selections when switching providers
       setSelectedAccount(null);
@@ -33,9 +34,11 @@ const InboxPage: React.FC = () => {
       setMessages([]);
       
       const data = await channelsService.getAccounts(selectedProvider);
+      console.log('📋 Accounts loaded:', data);
       setAccounts(data);
       if (data.length > 0) {
         setSelectedAccount(data[0]);
+        console.log('✅ Selected account:', data[0]);
       }
     } catch (error) {
       console.error('Failed to load accounts:', error);
@@ -46,10 +49,13 @@ const InboxPage: React.FC = () => {
 
   const loadChats = useCallback(async (accountId: string) => {
     try {
+      console.log('💬 Loading chats for provider:', selectedProvider, 'account:', accountId);
       const data = await channelsService.getChats(selectedProvider, accountId);
+      console.log('💬 Chats loaded:', data);
       setChats(data);
       if (data.length > 0 && !selectedChat) {
         setSelectedChat(data[0]);
+        console.log('✅ Selected chat:', data[0]);
       }
     } catch (error) {
       console.error('Failed to load chats:', error);
@@ -347,13 +353,19 @@ const InboxPage: React.FC = () => {
           <div className="provider-tabs">
             <button
               className={`provider-tab ${selectedProvider === 'whatsapp' ? 'active' : ''}`}
-              onClick={() => setSelectedProvider('whatsapp')}
+              onClick={() => {
+                console.log('🔄 Switching to WhatsApp tab');
+                setSelectedProvider('whatsapp');
+              }}
             >
               📱 WhatsApp
             </button>
             <button
               className={`provider-tab ${selectedProvider === 'instagram' ? 'active' : ''}`}
-              onClick={() => setSelectedProvider('instagram')}
+              onClick={() => {
+                console.log('🔄 Switching to Instagram tab');
+                setSelectedProvider('instagram');
+              }}
             >
               📸 Instagram
             </button>
