@@ -77,11 +77,25 @@ export const channelsService = {
     accountId: string,
     chatId: string,
     body: string,
-    attachments: any[] = []
+    attachments: any[] = [],
+    emailData?: {
+      subject?: string;
+      to?: string;
+      cc?: string;
+      bcc?: string;
+    }
   ): Promise<any> => {
+    const payload: any = { body, attachments };
+    if (emailData) {
+      payload.subject = emailData.subject;
+      payload.to = emailData.to;
+      payload.cc = emailData.cc;
+      payload.bcc = emailData.bcc;
+    }
+    
     const response = await api.post(
       `/channels/${provider}/${accountId}/chats/${chatId}/send`,
-      { body, attachments }
+      payload
     );
     return response.data;
   },

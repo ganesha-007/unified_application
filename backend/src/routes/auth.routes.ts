@@ -1,5 +1,8 @@
 import { Router, Response } from 'express';
 import { generateTestToken } from '../middleware/auth';
+import { initiateGmailAuth, handleGmailCallback } from '../controllers/gmail.controller';
+import { initiateOutlookAuth, handleOutlookCallback } from '../controllers/outlook.controller';
+import { authenticate } from '../middleware/auth';
 
 const router = Router();
 
@@ -61,6 +64,18 @@ router.post('/test-token', (req, res: Response) => {
     res.status(500).json({ error: 'Failed to generate token' });
   }
 });
+
+/**
+ * Gmail OAuth endpoints
+ */
+router.get('/gmail', authenticate, initiateGmailAuth);
+router.get('/gmail/callback', handleGmailCallback);
+
+/**
+ * Outlook OAuth endpoints
+ */
+router.get('/outlook', authenticate, initiateOutlookAuth);
+router.get('/outlook/callback', handleOutlookCallback);
 
 export default router;
 

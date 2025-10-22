@@ -28,8 +28,17 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      localStorage.removeItem('authToken');
-      window.location.href = '/login';
+      // Only redirect to login if it's a general auth error, not a specific service error
+      const errorMessage = error.response?.data?.error || '';
+      const isServiceSpecificError = errorMessage.includes('reconnect') || 
+                                   errorMessage.includes('expired') ||
+                                   errorMessage.includes('Outlook') ||
+                                   errorMessage.includes('Gmail');
+      
+      if (!isServiceSpecificError) {
+        localStorage.removeItem('authToken');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }

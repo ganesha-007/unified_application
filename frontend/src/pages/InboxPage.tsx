@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { channelsService, Account, Chat, Message } from '../services/channels.service';
+import { gmailService } from '../services/gmail.service';
+import { outlookService } from '../services/outlook.service';
 import './InboxPage.css';
 
 const InboxPage: React.FC = () => {
@@ -18,9 +20,46 @@ const InboxPage: React.FC = () => {
   const [sending, setSending] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [unreadCounts, setUnreadCounts] = useState<{[chatId: string]: number}>({});
-  const [selectedProvider, setSelectedProvider] = useState<'whatsapp' | 'instagram'>('whatsapp');
+  const [selectedProvider, setSelectedProvider] = useState<'whatsapp' | 'instagram' | 'email' | 'outlook'>('whatsapp');
+  const [attachments, setAttachments] = useState<File[]>([]);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Attachment handling functions
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (files) {
+      const newFiles = Array.from(files);
+      setAttachments(prev => [...prev, ...newFiles]);
+    }
+  };
+
+  const removeAttachment = (index: number) => {
+    setAttachments(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const convertFileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Remove the data URL prefix (e.g., "data:image/png;base64,")
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = error => reject(error);
+    });
+  };
 
   // Define all functions first
   const loadAccounts = useCallback(async () => {
@@ -33,15 +72,29 @@ const InboxPage: React.FC = () => {
       setChats([]);
       setMessages([]);
       
-      const data = await channelsService.getAccounts(selectedProvider);
+      let data;
+      if (selectedProvider === 'email') {
+        data = await gmailService.getAccounts();
+      } else if (selectedProvider === 'outlook') {
+        data = await outlookService.getAccounts();
+      } else {
+        data = await channelsService.getAccounts(selectedProvider);
+      }
       console.log('📋 Accounts loaded:', data);
       setAccounts(data);
       if (data.length > 0) {
         setSelectedAccount(data[0]);
         console.log('✅ Selected account:', data[0]);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to load accounts:', error);
+      
+      // Handle Outlook authentication errors specifically
+      if (selectedProvider === 'outlook' && error.response?.status === 401) {
+        console.log('🔄 Outlook authentication required - user needs to reconnect');
+        // Set empty accounts array so the UI can show connection prompt
+        setAccounts([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -50,7 +103,14 @@ const InboxPage: React.FC = () => {
   const loadChats = useCallback(async (accountId: string) => {
     try {
       console.log('💬 Loading chats for provider:', selectedProvider, 'account:', accountId);
-      const data = await channelsService.getChats(selectedProvider, accountId);
+      let data;
+      if (selectedProvider === 'email') {
+        data = await gmailService.getChats(accountId);
+      } else if (selectedProvider === 'outlook') {
+        data = await outlookService.getChats(accountId);
+      } else {
+        data = await channelsService.getChats(selectedProvider, accountId);
+      }
       console.log('💬 Chats loaded:', data);
       setChats(data);
       if (data.length > 0 && !selectedChat) {
@@ -82,15 +142,26 @@ const InboxPage: React.FC = () => {
 
   const loadMessages = useCallback(async (accountId: string, chatId: string) => {
     try {
-      const data = await channelsService.getMessages(selectedProvider, accountId, chatId);
-      setMessages(data.reverse()); // Reverse to show oldest first
+      console.log('📥 Loading messages for:', { accountId, chatId, provider: selectedProvider });
+      let data;
+      if (selectedProvider === 'email') {
+        data = await gmailService.getMessages(accountId, chatId);
+      } else if (selectedProvider === 'outlook') {
+        data = await outlookService.getMessages(accountId, chatId);
+      } else {
+        data = await channelsService.getMessages(selectedProvider, accountId, chatId);
+      }
+      console.log('📥 Messages loaded:', data.length, 'messages');
+      // Sort ascending so newest appears at the bottom (Gmail-like)
+      const sorted = [...data].sort((a: any, b: any) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime());
+      setMessages(sorted);
       
       // Clear unread count for the currently viewed chat
       calculateUnreadCounts(data, chatId);
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
-  }, [calculateUnreadCounts]);
+  }, [calculateUnreadCounts, selectedProvider]);
 
   const clearUnreadCount = useCallback((chatId: string) => {
     setUnreadCounts(prev => {
@@ -104,22 +175,248 @@ const InboxPage: React.FC = () => {
     if (!messageInput.trim() || !selectedAccount || !selectedChat) return;
 
     const messageText = messageInput.trim();
-    setMessageInput('');
     setSending(true);
+    
+    // Clear input after validation but before sending
+    setMessageInput('');
 
     try {
-      await channelsService.sendMessage(
-        selectedProvider,
-        selectedAccount.id as string,
-        selectedChat.provider_chat_id,
-        messageText
-      );
+      console.log('📤 Sending message:', {
+        provider: selectedProvider,
+        accountId: selectedAccount.id,
+        chatId: selectedChat.provider_chat_id,
+        messageText,
+        hasAttachments: attachments.length > 0
+      });
+      
+      if (selectedProvider === 'email') {
+        // For Gmail, determine the correct recipient for the reply
+        // We need to find who to reply to based on the thread participants
+        let replyTo = '';
+        
+        if (messages.length > 0) {
+          // Get all unique participants from the thread
+          const participants = new Set<string>();
+          messages.forEach((msg: any) => {
+            if (msg.metadata?.from) {
+              const from = msg.metadata.from;
+              if (typeof from === 'object' && from?.address) {
+                participants.add(from.address);
+              } else if (typeof from === 'string') {
+                participants.add(from);
+              }
+            }
+            if (msg.metadata?.to) {
+              const to = msg.metadata.to;
+              if (Array.isArray(to)) {
+                to.forEach(t => {
+                  if (typeof t === 'object' && t?.address) {
+                    participants.add(t.address);
+                  } else if (typeof t === 'string') {
+                    participants.add(t);
+                  }
+                });
+              } else if (typeof to === 'object' && to?.address) {
+                participants.add(to.address);
+              } else if (typeof to === 'string') {
+                participants.add(to);
+              }
+            }
+          });
+          
+          // Find the participant who is not the current user
+          const currentUserEmail = (selectedAccount as any).email || '';
+          const participantsArray = Array.from(participants);
+          for (const participant of participantsArray) {
+            if (participant !== currentUserEmail && !participant.includes(currentUserEmail)) {
+              replyTo = participant;
+              break;
+            }
+          }
+        }
+        
+        // Fallback to the original sender if we can't determine the correct recipient
+        if (!replyTo) {
+          const from = selectedChat.metadata?.from;
+          if (typeof from === 'object' && from?.address) {
+            replyTo = from.address;
+          } else if (typeof from === 'string') {
+            replyTo = from;
+          } else {
+            replyTo = '';
+          }
+        }
+
+        // Convert attachments to base64
+        const attachmentData = [];
+        if (attachments.length > 0) {
+          console.log('📎 Frontend: Converting attachments to base64:', attachments.length);
+          for (const file of attachments) {
+            console.log('📎 Frontend: Processing file:', file.name, file.type, file.size);
+            const base64Data = await convertFileToBase64(file);
+            console.log('📎 Frontend: Base64 data length:', base64Data.length);
+            attachmentData.push({
+              name: file.name,
+              type: file.type,
+              data: base64Data
+            });
+          }
+        }
+        console.log('📎 Frontend: Final attachment data:', attachmentData.length);
+
+        console.log('📧 Frontend: Sending message with:', {
+          body: messageText,
+          bodyLength: messageText.length,
+          subject: selectedChat.title || 'No Subject',
+          to: replyTo,
+          attachmentsCount: attachmentData.length
+        });
+
+        await gmailService.sendMessage(
+          selectedAccount.id as string,
+          selectedChat.provider_chat_id,
+          {
+            body: messageText,
+            subject: selectedChat.title || 'No Subject',
+            to: replyTo,
+            attachments: attachmentData
+          }
+        );
+        
+        // Clear attachments after sending
+        setAttachments([]);
+      } else if (selectedProvider === 'outlook') {
+        console.log('📧 Processing Outlook message send...');
+        // For Outlook, determine the correct recipient for the reply
+        let replyTo = '';
+        
+        // Email validation regex
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        
+        if (messages.length > 0) {
+          // Get all unique participants from the thread
+          const participants = new Set<string>();
+          messages.forEach((msg: any) => {
+            // Extract from field
+            if (msg.metadata?.from) {
+              const from = msg.metadata.from;
+              if (typeof from === 'object' && from?.address && emailRegex.test(from.address)) {
+                participants.add(from.address);
+              } else if (typeof from === 'string' && emailRegex.test(from)) {
+                participants.add(from);
+              }
+            }
+            
+            // Extract toRecipients field
+            if (msg.metadata?.toRecipients && Array.isArray(msg.metadata.toRecipients)) {
+              msg.metadata.toRecipients.forEach((recipient: any) => {
+                if (recipient?.address && emailRegex.test(recipient.address)) {
+                  participants.add(recipient.address);
+                } else if (typeof recipient === 'string' && emailRegex.test(recipient)) {
+                  participants.add(recipient);
+                }
+              });
+            }
+            
+            // Extract ccRecipients field
+            if (msg.metadata?.ccRecipients && Array.isArray(msg.metadata.ccRecipients)) {
+              msg.metadata.ccRecipients.forEach((recipient: any) => {
+                if (recipient?.address && emailRegex.test(recipient.address)) {
+                  participants.add(recipient.address);
+                } else if (typeof recipient === 'string' && emailRegex.test(recipient)) {
+                  participants.add(recipient);
+                }
+              });
+            }
+            
+            // Also check sender_id if it's a valid email
+            if (msg.sender_id && emailRegex.test(msg.sender_id)) {
+              participants.add(msg.sender_id);
+            }
+          });
+          
+          // Find the participant who is not the current user
+          const currentUserEmail = (selectedAccount as any).email || '';
+          const participantsArray = Array.from(participants);
+          console.log('📧 All conversation participants:', participantsArray);
+          console.log('📧 Current user email:', currentUserEmail);
+          
+          for (const participant of participantsArray) {
+            if (participant !== currentUserEmail && !participant.includes(currentUserEmail) && emailRegex.test(participant)) {
+              replyTo = participant;
+              break;
+            }
+          }
+        }
+        
+        // If still no valid recipient, let the backend handle recipient determination
+        if (!replyTo || !emailRegex.test(replyTo)) {
+          console.log('⚠️ No valid recipient found in frontend, letting backend determine recipients');
+          replyTo = ''; // Let backend handle recipient determination
+        }
+        
+        console.log('📧 Outlook replyTo determined:', replyTo);
+        
+        // Convert attachments to base64
+        const attachmentData = [];
+        if (attachments.length > 0) {
+          console.log('📎 Frontend: Converting attachments to base64:', attachments.length);
+          for (const file of attachments) {
+            console.log('📎 Frontend: Processing file:', file.name, file.type, file.size);
+            const base64Data = await convertFileToBase64(file);
+            console.log('📎 Frontend: Base64 data length:', base64Data.length);
+            attachmentData.push({
+              name: file.name,
+              type: file.type,
+              data: base64Data
+            });
+          }
+        }
+
+        console.log('📧 Calling outlookService.sendMessage with:', {
+          accountId: selectedAccount.id,
+          chatId: selectedChat.provider_chat_id,
+          body: messageText,
+          subject: selectedChat.title || 'No Subject',
+          to: replyTo,
+          attachments: attachmentData.length
+        });
+
+        const outlookMessageData: any = {
+          body: messageText,
+          subject: selectedChat.title || 'No Subject',
+          attachments: attachmentData
+        };
+        
+        // Only include 'to' field if we have a valid recipient
+        if (replyTo) {
+          outlookMessageData.to = replyTo;
+        }
+
+        await outlookService.sendMessage(
+          selectedAccount.id as string,
+          selectedChat.provider_chat_id,
+          outlookMessageData
+        );
+        
+        // Clear attachments after sending
+        setAttachments([]);
+      } else {
+        await channelsService.sendMessage(
+          selectedProvider,
+          selectedAccount.id as string,
+          selectedChat.provider_chat_id,
+          messageText
+        );
+      }
 
       // Reload messages to get the latest
+      console.log('🔄 Reloading messages after send...');
       await loadMessages(
         selectedAccount.id as string,
         selectedChat.provider_chat_id
       );
+      console.log('✅ Messages reloaded');
     } catch (error) {
       console.error('Failed to send message:', error);
       setMessageInput(messageText); // Restore message on error
@@ -299,14 +596,56 @@ const InboxPage: React.FC = () => {
   }
 
   if (accounts.length === 0) {
+    const getEmptyStateContent = () => {
+      switch (selectedProvider) {
+        case 'whatsapp':
+          return {
+            icon: '📱',
+            title: 'No WhatsApp accounts connected',
+            description: 'Connect your WhatsApp account to start messaging',
+            buttonText: 'Connect WhatsApp'
+          };
+        case 'instagram':
+          return {
+            icon: '📷',
+            title: 'No Instagram accounts connected',
+            description: 'Connect your Instagram account to start messaging',
+            buttonText: 'Connect Instagram'
+          };
+        case 'email':
+          return {
+            icon: '📧',
+            title: 'No Gmail accounts connected',
+            description: 'Connect your Gmail account to start messaging',
+            buttonText: 'Connect Gmail'
+          };
+        case 'outlook':
+          return {
+            icon: '📧',
+            title: 'No Outlook accounts connected',
+            description: 'Connect your Outlook account to start messaging',
+            buttonText: 'Connect Outlook'
+          };
+        default:
+          return {
+            icon: '📱',
+            title: 'No accounts connected',
+            description: 'Connect an account to start messaging',
+            buttonText: 'Connect Account'
+          };
+      }
+    };
+
+    const emptyState = getEmptyStateContent();
+
     return (
       <div className="whatsapp-app">
         <div className="empty-state">
-          <div className="empty-icon">📱</div>
-          <h2>No WhatsApp accounts connected</h2>
-          <p>Connect your WhatsApp account to start messaging</p>
+          <div className="empty-icon">{emptyState.icon}</div>
+          <h2>{emptyState.title}</h2>
+          <p>{emptyState.description}</p>
           <button onClick={() => navigate('/connections')} className="btn-connect">
-            Connect WhatsApp
+            {emptyState.buttonText}
           </button>
         </div>
       </div>
@@ -368,6 +707,24 @@ const InboxPage: React.FC = () => {
               }}
             >
               📸 Instagram
+            </button>
+            <button
+              className={`provider-tab ${selectedProvider === 'email' ? 'active' : ''}`}
+              onClick={() => {
+                console.log('🔄 Switching to Email tab');
+                setSelectedProvider('email');
+              }}
+            >
+              📧 Email
+            </button>
+            <button
+              className={`provider-tab ${selectedProvider === 'outlook' ? 'active' : ''}`}
+              onClick={() => {
+                console.log('🔄 Switching to Outlook tab');
+                setSelectedProvider('outlook');
+              }}
+            >
+              📧 Outlook
             </button>
           </div>
           
@@ -499,37 +856,113 @@ const InboxPage: React.FC = () => {
 
             {/* Messages Area */}
             <div className="messages-container">
-              <div className="messages-list">
-                {messages.map((message) => (
-                  <div
-                    key={message.id}
-                    className={`message ${message.direction === 'out' ? 'sent' : 'received'}`}
-                  >
-                    <div className="message-bubble">
-                      <div className="message-text">{message.body}</div>
-                      <div className="message-meta">
-                        <span className="message-time">
-                          {formatTime(message.sent_at)}
-                        </span>
-                        {message.direction === 'out' && (
-                          <div className="message-status">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-                              <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
-                            </svg>
-                          </div>
-                        )}
+              {selectedProvider === 'email' ? (
+                <div className="email-thread">
+                  {messages.map((message) => (
+                    <div key={message.id} className="email-card">
+                      <div className="email-card-header">
+                        <div className="email-from">
+                          {(() => {
+                            const from = (message as any).metadata?.from;
+                            if (typeof from === 'object' && from?.name) {
+                              return from.name;
+                            } else if (typeof from === 'object' && from?.address) {
+                              return from.address;
+                            } else if (typeof from === 'string') {
+                              return from;
+                            }
+                            return 'Unknown sender';
+                          })()}
+                        </div>
+                        <div className="email-date">{formatTime(message.sent_at)}</div>
+                      </div>
+                      <div className="email-subject">{(message as any).metadata?.subject || selectedChat.title || 'No Subject'}</div>
+                      {(message as any).metadata?.to && (
+                        <div className="email-to">
+                          To: {(() => {
+                            const to = (message as any).metadata?.to;
+                            if (Array.isArray(to)) {
+                              return to.map(t => typeof t === 'object' ? (t.name || t.address) : t).join(', ');
+                            } else if (typeof to === 'object' && to?.name) {
+                              return to.name;
+                            } else if (typeof to === 'object' && to?.address) {
+                              return to.address;
+                            } else if (typeof to === 'string') {
+                              return to;
+                            }
+                            return 'Unknown recipient';
+                          })()}
+                        </div>
+                      )}
+                      <div className="email-body" style={{ whiteSpace: 'pre-wrap' }}>{message.body}</div>
+                    </div>
+                  ))}
+                  <div ref={messagesEndRef} />
+                </div>
+              ) : (
+                <div className="messages-list">
+                  {messages.map((message) => (
+                    <div
+                      key={message.id}
+                      className={`message ${message.direction === 'out' ? 'sent' : 'received'}`}
+                    >
+                      <div className="message-bubble">
+                        <div className="message-text">{message.body}</div>
+                        <div className="message-meta">
+                          <span className="message-time">
+                            {formatTime(message.sent_at)}
+                          </span>
+                          {message.direction === 'out' && (
+                            <div className="message-status">
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                                <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>
+                              </svg>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-                <div ref={messagesEndRef} />
-              </div>
+                  ))}
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
             </div>
 
             {/* Message Input */}
             <div className="message-input-container">
+              {/* Attachments Display */}
+              {attachments.length > 0 && (
+                <div className="attachments-preview">
+                  {attachments.map((file, index) => (
+                    <div key={index} className="attachment-item">
+                      <span className="attachment-name">{file.name}</span>
+                      <span className="attachment-size">({formatFileSize(file.size)})</span>
+                      <button 
+                        onClick={() => removeAttachment(index)}
+                        className="remove-attachment"
+                        title="Remove attachment"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
               <div className="message-input-wrapper">
-                <button className="icon-btn attachment-btn" title="Attach">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  multiple
+                  style={{ display: 'none' }}
+                  accept="*/*"
+                />
+                <button 
+                  className="icon-btn attachment-btn" 
+                  title="Attach files"
+                  onClick={() => fileInputRef.current?.click()}
+                >
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5c0-1.38 1.12-2.5 2.5-2.5s2.5 1.12 2.5 2.5v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5c0 1.38 1.12 2.5 2.5 2.5s2.5-1.12 2.5-2.5V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"/>
                   </svg>
@@ -550,12 +983,12 @@ const InboxPage: React.FC = () => {
                     disabled={sending}
                   />
                 </div>
-                <button
-                  onClick={handleSendMessage}
-                  disabled={sending || !messageInput.trim()}
-                  className="send-btn"
-                  title="Send"
-                >
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={sending || (!messageInput.trim() && attachments.length === 0)}
+                    className="send-btn"
+                    title="Send"
+                  >
                   <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
                   </svg>
@@ -564,16 +997,58 @@ const InboxPage: React.FC = () => {
             </div>
           </>
         ) : (
-          <div className="no-chat-selected">
-            <div className="whatsapp-logo">
-              <svg width="200" height="200" viewBox="0 0 24 24" fill="currentColor">
-                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.885 3.488"/>
-              </svg>
+          selectedProvider === 'email' ? (
+            <div className="email-list">
+              {chats.length === 0 ? (
+                <div className="empty-chats">No emails yet</div>
+              ) : (
+                chats.map((chat) => (
+                  <div
+                    key={(chat as any).id}
+                    className={`email-row ${(selectedChat as any)?.id === (chat as any).id ? 'active' : ''}`}
+                    onClick={() => setSelectedChat(chat as any)}
+                  >
+                    <div className="email-row-left">
+                      <div className="email-avatar">{getInitials((chat as any).title || 'Email')}</div>
+                    </div>
+                    <div className="email-row-center">
+                      <div className="email-row-top">
+                        <span className="email-from">
+                          {(() => {
+                            const from = (chat as any).metadata?.from;
+                            if (typeof from === 'object' && from?.name) {
+                              return from.name;
+                            } else if (typeof from === 'object' && from?.address) {
+                              return from.address;
+                            } else if (typeof from === 'string') {
+                              return from;
+                            }
+                            return 'Unknown sender';
+                          })()}
+                        </span>
+                        <span className="email-date">{(chat as any).last_message_at ? formatLastMessageTime((chat as any).last_message_at) : ''}</span>
+                      </div>
+                      <div className="email-row-bottom">
+                        <span className="email-subject">{(chat as any).title || 'No Subject'}</span>
+                        <span className="email-snippet">{(chat as any).metadata?.snippet || ''}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-            <h2>WhatsApp Web</h2>
-            <p>Send and receive messages without keeping your phone online.</p>
-            <p>Use WhatsApp on up to 4 linked devices and 1 phone at the same time.</p>
-          </div>
+          ) : (
+            <div className="no-chat-selected">
+              <div className="whatsapp-logo">
+                <svg width="200" height="200" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893A11.821 11.821 0 0020.885 3.488"/>
+                </svg>
+              </div>
+              <h2>WhatsApp Web</h2>
+              <p>Send and receive messages without keeping your phone online.</p>
+              <p>Use WhatsApp on up to 4 linked devices and 1 phone at the same time.</p>
+            </div>
+          )
         )}
       </div>
     </div>

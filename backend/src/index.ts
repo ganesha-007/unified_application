@@ -53,6 +53,22 @@ app.use('/api/channels', channelsRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/user', userCredentialsRoutes);
 
+// Direct Gmail OAuth callback route (for compatibility with Google OAuth config)
+app.get('/auth/gmail/callback', (req, res) => {
+  // Redirect to the API route
+  const { code, state, scope } = req.query;
+  const redirectUrl = `/api/auth/gmail/callback?code=${code}&state=${state}&scope=${scope}`;
+  res.redirect(redirectUrl);
+});
+
+// Direct Outlook OAuth callback route (for compatibility with Microsoft OAuth config)
+app.get('/auth/outlook/callback', (req, res) => {
+  // Redirect to the API route
+  const queryString = new URLSearchParams(req.query as any).toString();
+  const redirectUrl = `/api/auth/outlook/callback?${queryString}`;
+  res.redirect(redirectUrl);
+});
+
 // Socket.io connection handling with JWT authentication
 io.on('connection', (socket) => {
   console.log(`✅ Client connected: ${socket.id}`);
