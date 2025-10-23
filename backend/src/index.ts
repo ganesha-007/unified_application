@@ -10,6 +10,7 @@ import channelsRoutes from './routes/channels.routes';
 import webhooksRoutes from './routes/webhooks.routes';
 import authRoutes from './routes/auth.routes';
 import userCredentialsRoutes from './routes/user-credentials.routes';
+import usageRoutes from './routes/usage.routes';
 
 dotenv.config();
 
@@ -52,6 +53,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/channels', channelsRoutes);
 app.use('/api/webhooks', webhooksRoutes);
 app.use('/api/user', userCredentialsRoutes);
+app.use('/api/usage', usageRoutes);
 
 // Direct Gmail OAuth callback route (for compatibility with Google OAuth config)
 app.get('/auth/gmail/callback', (req, res) => {

@@ -3,6 +3,7 @@ import { Client } from '@microsoft/microsoft-graph-client';
 import { pool } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { convertHtmlToText, cleanEmailBody } from '../utils/emailUtils';
+import { emailSafetyService, EmailRequest } from '../services/emailSafety.service';
 // import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -678,6 +679,31 @@ export const sendOutlookMessage = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ 
         error: 'No valid recipients found', 
         details: 'Unable to determine email recipients for this conversation'
+      });
+    }
+
+    // Check email safety before proceeding
+    const safetyCheck = await emailSafetyService.checkEmailSafety({
+      userId,
+      accountId: numericAccountId,
+      provider: 'outlook',
+      recipients: validRecipients,
+      subject: subject || 'No Subject',
+      body,
+      attachments: clientAttachments?.map((att: any) => ({
+        name: att.name,
+        type: att.type,
+        size: att.size || 0
+      }))
+    });
+
+    if (!safetyCheck.allowed) {
+      console.log('❌ Email blocked by safety system:', safetyCheck.reason);
+      return res.status(429).json({
+        error: 'Email blocked by safety system',
+        reason: safetyCheck.reason,
+        retryAfter: safetyCheck.retryAfter,
+        limits: safetyCheck.limits
       });
     }
 

@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { google } from 'googleapis';
 import { pool } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
+import { emailSafetyService, EmailRequest } from '../services/emailSafety.service';
 
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,

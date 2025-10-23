@@ -20,6 +20,10 @@ async function runMigrations() {
     const outlookMigration = readFileSync(join(__dirname, '005_add_outlook_credentials.sql'), 'utf-8');
     await client.query(outlookMigration);
     
+    // Read and execute safe migration for new tables
+    const safeMigration = readFileSync(join(__dirname, '009_safe_migration.sql'), 'utf-8');
+    await client.query(safeMigration);
+    
     console.log('✅ Migrations completed successfully');
   } catch (error) {
     console.error('❌ Migration failed:', error);
